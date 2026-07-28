@@ -165,6 +165,8 @@ main{display:grid;grid-template-columns:1fr 380px;height:calc(100% - 106px)}
 .badge.brk{background:var(--hoeoe);color:#fff;animation:brkblink 1.4s step-end infinite}
 @keyframes brkblink{0%,100%{opacity:1}50%{opacity:.55}}
 .card.isbrk .hl{color:#fff}
+.card.fresh{animation:freshin 1.6s ease-out 1}
+@keyframes freshin{0%{background:rgba(160,210,255,.16);border-left-color:#9CC8FF}100%{background:transparent}}
 .rgname{font-family:var(--display);font-weight:700;font-size:12px}
 .time{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--print-dim)}
 .hl{font-family:var(--display);font-weight:700;font-size:15.5px;line-height:1.42;margin:0 0 5px;letter-spacing:-.015em}
@@ -430,7 +432,7 @@ function render(){
       const close=it.link?"a":"div";
       const pin=it.region!=="전국"?`<span class="pin" data-id="${it.id}" title="지도에서 보기">◎ 지도</span>`:"";
       const badge=it.breaking?`<span class="badge brk">속보</span>`:`<span class="badge">${u.k}</span>`;
-      return `<${tag} class="card${it.breaking?" isbrk":""}" style="--c:${u.c}" data-id="${it.id}">
+      return `<${tag} class="card${it.breaking?" isbrk":""}${it.fresh?" fresh":""}" style="--c:${u.c}" data-id="${it.id}">
         <div class="meta">${badge}<span class="rgname">${esc(it.region)}</span><span class="time">${esc(it.time||"")}</span></div>
         <p class="hl">${esc(it.headline)}</p><p class="sm">${esc(it.summary||"")}</p>
         <div class="foot"><span class="src">${esc(it.source||"출처 미상")}</span>${pin}</div></${close}>`;
@@ -503,25 +505,46 @@ function setMode(m,t){state.mode=m;const el=document.getElementById("live");el.d
 const hm=d=>String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
 
 async function fetchNews(){
+  const firstLoad = state.items.length===0 || state.mode==="sample";
   setMode("loading","수집 중"); render();
   try{
-    const items = CONFIG.ENDPOINT ? await fromBackend() : await fromClaude();
-    if(!items.length) throw new Error("결과 없음");
-    state.items=items;
-    setMode("live", CONFIG.ENDPOINT ? "LIVE · 속보망" : "LIVE · 검색");
+    if(CONFIG.ENDPOINT){
+      /* 선발대: 통신사 속보만 — 피드 서너 개라 수 초 안에 온다 */
+      const wire=fromBackend("wire").then(items=>{
+        if(items.length && state.mode==="loading"){
+          mergeItems(items,!firstLoad);
+          setMode("live","LIVE · 수신중"); render();
+        }
+      }).catch(()=>{});
+      /* 본대: 전체 피드 */
+      const items=await fromBackend("");
+      await wire.catch(()=>{});
+      if(!items.length && !state.items.length) throw new Error("결과 없음");
+      mergeItems(items,!firstLoad);
+      setMode("live","LIVE · 속보망");
+    }else{
+      const items=await fromClaude();
+      if(!items.length) throw new Error("결과 없음");
+      mergeItems(items,false);
+      setMode("live","LIVE · 검색");
+    }
   }catch(err){
     console.warn("수집 실패:",err);
-    state.items=SAMPLE.map((o,i)=>({...o,id:"s"+i}));
-    setMode("sample","샘플 데이터");
+    if(!state.items.length){
+      state.items=SAMPLE.map((o,i)=>({...o,id:"s"+i,ts:Date.now()-i*60000}));
+      setMode("sample","샘플 데이터");
+    }else{
+      setMode("live","LIVE · 속보망");   // 이미 받은 것으로 유지
+    }
   }
   document.getElementById("sTime").textContent=hm(new Date());
   state.nextAt=Date.now()+CONFIG.REFRESH;
   render();
 }
 
-async function fromBackend(){
-  const url=CONFIG.ENDPOINT+(CONFIG.ENDPOINT.indexOf("?")<0?"?":"&")+"t="+Date.now();
-  const res=await fetch(url,{method:"GET"});
+async function fromBackend(part){
+  const q=(CONFIG.ENDPOINT.indexOf("?")<0?"?":"&")+(part?"part="+part+"&":"")+"t="+Date.now();
+  const res=await fetch(CONFIG.ENDPOINT+q,{method:"GET"});
   if(!res.ok) throw new Error("HTTP "+res.status);
   const data=await res.json();
   if(!data.ok) throw new Error(data.error||"백엔드 오류");
@@ -558,8 +581,26 @@ function normalize(arr){
   return arr.filter(o=>o&&(REGIONS[o.region]||o.region==="전국")&&o.headline)
     .map((o,i)=>({id:"n"+Date.now()+"_"+i,region:o.region,headline:String(o.headline),
       summary:String(o.summary||""),urgency:[1,2,3].includes(+o.urgency)?+o.urgency:1,
-      source:String(o.source||""),time:String(o.time||""),link:o.link||"",breaking:o.breaking?1:0}))
-    .sort((a,b)=>(b.breaking-a.breaking)||(b.urgency-a.urgency));
+      source:String(o.source||""),time:String(o.time||""),link:o.link||"",
+      breaking:o.breaking?1:0,ts:+o.ts||Date.now()}))
+    .sort((a,b)=>(b.ts-a.ts)||(b.breaking-a.breaking));
+}
+
+/* 점진 수신: 새로 온 기사를 기존 목록에 합치고 최신순으로 다시 세운다.
+   같은 기사(제목 앞 18자 기준)는 한 번만 남는다. 처음 이후에 새로 들어온
+   기사에는 fresh 표식이 붙어 카드가 한 번 빛난다. */
+const keyOf=h=>String(h).replace(/[^가-힣a-zA-Z0-9]/g,"").slice(0,18);
+function mergeItems(arr,markFresh){
+  const map={};
+  state.items.forEach(i=>{i.fresh=0;map[keyOf(i.headline)]=i;});
+  arr.forEach(i=>{
+    const k=keyOf(i.headline); if(!k) return;
+    if(!map[k]){ i.fresh=markFresh?1:0; map[k]=i; }
+    else if(i.ts>map[k].ts){ i.fresh=0; map[k]=i; }
+  });
+  state.items=Object.values(map)
+    .sort((a,b)=>(b.ts-a.ts)||(b.breaking-a.breaking))
+    .slice(0,80);
 }
 
 setInterval(()=>{
