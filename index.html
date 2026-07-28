@@ -162,6 +162,9 @@ main{display:grid;grid-template-columns:1fr 380px;height:calc(100% - 106px)}
 .card.sel{background:var(--ink-3);border-left-color:var(--c)}
 .meta{display:flex;align-items:center;gap:8px;margin-bottom:6px}
 .badge{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;padding:2px 6px;color:#050B1A;background:var(--c);font-weight:500}
+.badge.brk{background:var(--hoeoe);color:#fff;animation:brkblink 1.4s step-end infinite}
+@keyframes brkblink{0%,100%{opacity:1}50%{opacity:.55}}
+.card.isbrk .hl{color:#fff}
 .rgname{font-family:var(--display);font-weight:700;font-size:12px}
 .time{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--print-dim)}
 .hl{font-family:var(--display);font-weight:700;font-size:15.5px;line-height:1.42;margin:0 0 5px;letter-spacing:-.015em}
@@ -353,6 +356,7 @@ function render(){
   const groups={}, byR={};
   state.items.forEach(it=>{
     (byR[it.region]=byR[it.region]||[]).push(it);
+    if(it.region==="전국") return;
     const city=cityOf(it);
     const key=city?it.region+"·"+city:it.region;
     if(!groups[key]){
@@ -424,11 +428,12 @@ function render(){
       const u=URG[it.urgency]||URG[1];
       const tag=it.link?`a href="${esc(it.link)}" target="_blank" rel="noopener"`:`div role="button" tabindex="0"`;
       const close=it.link?"a":"div";
-      return `<${tag} class="card" style="--c:${u.c}" data-id="${it.id}">
-        <div class="meta"><span class="badge">${u.k}</span><span class="rgname">${esc(it.region)}</span><span class="time">${esc(it.time||"")}</span></div>
+      const pin=it.region!=="전국"?`<span class="pin" data-id="${it.id}" title="지도에서 보기">◎ 지도</span>`:"";
+      const badge=it.breaking?`<span class="badge brk">속보</span>`:`<span class="badge">${u.k}</span>`;
+      return `<${tag} class="card${it.breaking?" isbrk":""}" style="--c:${u.c}" data-id="${it.id}">
+        <div class="meta">${badge}<span class="rgname">${esc(it.region)}</span><span class="time">${esc(it.time||"")}</span></div>
         <p class="hl">${esc(it.headline)}</p><p class="sm">${esc(it.summary||"")}</p>
-        <div class="foot"><span class="src">${esc(it.source||"출처 미상")}</span>
-        <span class="pin" data-id="${it.id}" title="지도에서 보기">◎ 지도</span></div></${close}>`;
+        <div class="foot"><span class="src">${esc(it.source||"출처 미상")}</span>${pin}</div></${close}>`;
     }).join("");
     /* 카드 클릭 = 기사 원문. ◎ 지도 버튼 = 해당 위치로 포커스 */
     list.querySelectorAll(".pin").forEach(b=>b.addEventListener("click",ev=>{
@@ -440,15 +445,19 @@ function render(){
     }));
   }
 
-  const t=state.items.slice(0,14).map(i=>`<span><b>${esc(i.region)}</b>${esc(i.headline)}</span>`).join("");
+  const tick=state.items.filter(i=>i.breaking).concat(state.items.filter(i=>!i.breaking)).slice(0,14);
+  const t=tick.map(i=>`<span><b>${esc(i.region)}</b>${esc(i.headline)}</span>`).join("");
   document.getElementById("ticker").innerHTML=t?t+t:"";
 
   const sel=document.getElementById("filter");
   if(!sel.options.length){
-    sel.innerHTML=`<option value="">전체</option>`+Object.keys(REGIONS).map(r=>`<option value="${r}">${r}</option>`).join("");
+    sel.innerHTML=`<option value="">전체</option><option value="전국">전국(통신)</option>`
+      +Object.keys(REGIONS).map(r=>`<option value="${r}">${r}</option>`).join("");
     sel.addEventListener("change",e=>{
       const r=e.target.value;
-      focusOn(r?{region:r,x:REGIONS[r].p[0],y:REGIONS[r].p[1]}:null);
+      if(!r){focusOn(null);return;}
+      if(r==="전국"){state.focus={region:"전국"};plane.style.setProperty("--zoom","1");render();return;}
+      focusOn({region:r,x:REGIONS[r].p[0],y:REGIONS[r].p[1]});
     });
   }
   sel.value=state.focus?state.focus.region:"";
@@ -499,7 +508,7 @@ async function fetchNews(){
     const items = CONFIG.ENDPOINT ? await fromBackend() : await fromClaude();
     if(!items.length) throw new Error("결과 없음");
     state.items=items;
-    setMode("live", CONFIG.ENDPOINT ? "LIVE · RSS" : "LIVE · 검색");
+    setMode("live", CONFIG.ENDPOINT ? "LIVE · 속보망" : "LIVE · 검색");
   }catch(err){
     console.warn("수집 실패:",err);
     state.items=SAMPLE.map((o,i)=>({...o,id:"s"+i}));
@@ -524,6 +533,7 @@ async function fromClaude(){
   const prompt=`오늘은 ${now.getFullYear()}년 ${now.getMonth()+1}월 ${now.getDate()}일(한국시간)이다. 웹 검색으로 대한민국 각 시·도의 최근 24시간 주요 뉴스와 속보를 찾아라.
 
 규칙
+- 통신사·언론사가 '[속보]' 표식을 붙인 기사를 최우선으로 찾아라.
 - 서로 다른 지역 9~12건. 수도권 편중 금지, 비수도권을 최소 6건 포함할 것.
 - region 값은 반드시 이 중 하나: 서울 부산 대구 인천 광주 대전 울산 세종 경기 강원 충북 충남 전북 전남 경북 경남 제주
 - headline 35자 이내, summary 55자 이내. 모두 한국어 평서형.
@@ -545,11 +555,11 @@ async function fromClaude(){
 }
 
 function normalize(arr){
-  return arr.filter(o=>o&&REGIONS[o.region]&&o.headline)
+  return arr.filter(o=>o&&(REGIONS[o.region]||o.region==="전국")&&o.headline)
     .map((o,i)=>({id:"n"+Date.now()+"_"+i,region:o.region,headline:String(o.headline),
       summary:String(o.summary||""),urgency:[1,2,3].includes(+o.urgency)?+o.urgency:1,
-      source:String(o.source||""),time:String(o.time||""),link:o.link||""}))
-    .sort((a,b)=>b.urgency-a.urgency);
+      source:String(o.source||""),time:String(o.time||""),link:o.link||"",breaking:o.breaking?1:0}))
+    .sort((a,b)=>(b.breaking-a.breaking)||(b.urgency-a.urgency));
 }
 
 setInterval(()=>{
