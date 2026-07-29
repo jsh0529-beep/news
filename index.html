@@ -250,7 +250,12 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 384px 384px;height:calc(10
    Apps Script 웹앱 /exec 주소를 넣으면 RSS·네이버 수집 경로로 전환된다.
    비워두면 Claude 웹검색으로 직접 가져오는 시연 모드로 동작한다.
    ═══════════════════════════════════════════════ */
-const CONFIG={ ENDPOINT:"https://script.google.com/macros/s/AKfycbzzX8Nmdw9IPukn1vIBEIjw-0NoUaB1yYmihuUwCkZkdyRubOzri9ysg00k0Wj07klZ/exec", MODEL:"claude-sonnet-4-6", REFRESH:60*1000 };
+const CONFIG={
+  ENDPOINT:"https://script.google.com/macros/s/AKfycbzzX8Nmdw9IPukn1vIBEIjw-0NoUaB1yYmihuUwCkZkdyRubOzri9ysg00k0Wj07klZ/exec",
+  MODEL:"claude-sonnet-4-6",
+  REFRESH:120*1000,        // 본선(전체 피드) 주기
+  WIRE_MS:20*1000          // 속보선(통신 [속보]) 주기
+};
 
 /* ── 좌표계 ──────────────────────────────────
    지도는 경위도 선형 사상이라 한 개의 1차식으로 전 지점을 찍는다.
@@ -593,6 +598,7 @@ async function fetchNews(){
       await wire.catch(()=>{});
       if(!items.length && !state.items.length) throw new Error("결과 없음");
       mergeItems(items,!firstLoad);
+      if(!firstLoad) announceBreaking(state.items);
       setMode("live","LIVE · 속보망");
     }else{
       const items=await fromClaude();
@@ -745,6 +751,75 @@ setInterval(()=>{
   const b=document.getElementById("hudB"), n=3+Math.floor(Math.random()*3);
   b.textContent="▮".repeat(n)+"▯".repeat(5-n);
 },1000);
+
+/* ── 속보 알림: 신호음 + 탭 제목 점멸 ──
+   새 [속보]가 병합되면 짧은 2음 신호를 울리고, 탭이 뒤에 있으면
+   제목을 '🔴 [속보] …' 로 점멸시킨다. 탭으로 돌아오면 원복.
+   (브라우저 정책상 소리는 사용자가 페이지와 한 번 상호작용한 뒤부터 난다) */
+const TITLE0=document.title;
+let audioCtx=null, blinkTimer=null, armed=false;
+["pointerdown","keydown"].forEach(ev=>document.addEventListener(ev,()=>{armed=true;},{once:false}));
+function chime(){
+  if(!armed) return;
+  try{
+    audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();
+    if(audioCtx.state==="suspended") audioCtx.resume();
+    const t=audioCtx.currentTime;
+    [[880,0,.09],[1318.5,.11,.14]].forEach(([f,d,len])=>{
+      const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+      o.type="sine"; o.frequency.value=f;
+      g.gain.setValueAtTime(0,t+d);
+      g.gain.linearRampToValueAtTime(.22,t+d+.015);
+      g.gain.exponentialRampToValueAtTime(.001,t+d+len);
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start(t+d); o.stop(t+d+len+.05);
+    });
+  }catch(e){/* 무음 환경이면 조용히 통과 */}
+}
+function blinkTitle(headline){
+  if(blinkTimer) clearInterval(blinkTimer);
+  const alt="🔴 [속보] "+headline.replace(/^\[속보\]\s*/,"").slice(0,24);
+  let on=true;
+  document.title=alt;
+  blinkTimer=setInterval(()=>{
+    if(!document.hidden){ clearInterval(blinkTimer); blinkTimer=null; document.title=TITLE0; return; }
+    document.title=on?alt:TITLE0; on=!on;
+  },1200);
+}
+document.addEventListener("visibilitychange",()=>{
+  if(!document.hidden && blinkTimer){ clearInterval(blinkTimer); blinkTimer=null; document.title=TITLE0; }
+});
+function announceBreaking(list){
+  const fresh=list.filter(i=>i.fresh&&i.breaking);
+  if(!fresh.length) return;
+  chime();
+  if(document.hidden) blinkTitle(fresh[0].headline);
+}
+
+/* 속보선: 20초마다 통신 [속보]만 가볍게 당긴다(백엔드 캐시 18초와 맞물림).
+   새 속보가 있으면 즉시 병합 → 기둥이 그 자리에서 솟는다. */
+let wireBusy=false;
+setInterval(async()=>{
+  if(!CONFIG.ENDPOINT || wireBusy || state.mode==="loading") return;
+  wireBusy=true;
+  try{
+    const items=await fromBackend("wire");
+    if(items.length){
+      const before=state.items.length;
+      mergeItems(items,true);
+      if(state.items.length!==before || state.items.some(i=>i.fresh)){
+        announceBreaking(state.items);
+        render();
+      }
+    }
+  }catch(e){/* 다음 주기에 재시도 */}
+  wireBusy=false;
+},CONFIG.WIRE_MS);
+
+/* 탭이 다시 보이면 즉시 한 번 당긴다 */
+document.addEventListener("visibilitychange",()=>{
+  if(!document.hidden && state.nextAt) fetchNews();
+});
 
 /* 기둥 상승·하강 구간에서만 다시 그린다 */
 let lastLive=-1;
