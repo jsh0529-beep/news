@@ -104,7 +104,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 384px 384px;height:calc(10
 .reset.on{opacity:1;pointer-events:auto}
 
 /* ── 피드 ─────────────────────────────── */
-.feed{border-left:1px solid var(--rule);display:flex;flex-direction:column;background:var(--ink-2);min-width:0}
+.feed{border-left:1px solid var(--rule);display:flex;flex-direction:column;background:var(--ink-2);min-width:0;min-height:0;overflow:hidden}
 .feedhead{padding:11px 16px;border-bottom:1px solid var(--rule);display:flex;align-items:center;gap:10px}
 .feedhead h2{font-family:var(--display);font-weight:800;font-size:16px;margin:0;letter-spacing:-.01em}
 .feedhead h2 b{font-family:var(--mono);font-weight:500;font-size:12px;color:var(--print-dim);margin-left:4px}
@@ -112,7 +112,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 384px 384px;height:calc(10
 .feedhead.brk h2 b{color:var(--hoeoe)}
 .feedhead select{margin-left:auto;background:var(--ink-3);color:var(--print);border:1px solid var(--rule);
   font-family:var(--mono);font-size:11px;padding:4px 6px}
-.list{flex:1;overflow-y:auto;overscroll-behavior:contain}
+.list{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 .list::-webkit-scrollbar{width:6px}
 .list::-webkit-scrollbar-thumb{background:var(--ink-3)}
 .card{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--rule);
