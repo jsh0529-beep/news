@@ -331,6 +331,8 @@ function cityOf(it){
 const TC=Math.cos(28*Math.PI/180), TS=Math.sin(28*Math.PI/180), PD=1500;
 const WW=926.0, WH=603.6, WOX=463.0, WOY=269.9, PW=828, PH=676;
 const V={S:.7, L:0, T:0};                       // 배율·이미지 좌상단
+/* 기둥 정책: 속보만 세운다. 도착 시 0.6초에 걸쳐 솟고, 60초 뒤 0.8초에 걸쳐 내려간다. */
+const BEAM_MS=60*1000, RISE=600, FALL=800;
 let baseS=.7;
 function warpPt(xp,yp,e){
   const lx=xp/100*PW-414, ly=yp/100*PH-338, ek=e||0;
@@ -349,11 +351,50 @@ function unproj(g,sx,sy){
 function geo(){ return {K:V.S/baseS*1, c:TC}; }   // 드로잉 배율·눌림 계수
 
 /* ── 오버레이 드로잉 ── */
+const state={items:[],focus:null,groups:[],mode:"loading",nextAt:0};
+
 const fxg=document.getElementById("fxg"), tagsEl=document.getElementById("tags");
+
+/* 살아있는 속보 발광점만 묶는다. k = 기둥 개폐 계수(0~1). */
+function liveGroups(){
+  const now=Date.now(), out={}, ease=x=>1-Math.pow(1-x,3);
+  state.items.forEach(it=>{
+    if(!it.breaking || it.region==="전국") return;
+    const age=now-(it.seen||now);
+    if(age>BEAM_MS+FALL) return;
+    const city=cityOf(it);
+    const key=city?it.region+"·"+city:it.region;
+    if(!out[key]){
+      const p=city?CITY[it.region][city]:REGIONS[it.region].p;
+      out[key]={name:city||it.region,region:it.region,x:p[0],y:p[1],items:[],age:age,
+                lift:city?0:REGIONS[it.region].lift};
+    }
+    out[key].items.push(it);
+    out[key].age=Math.min(out[key].age,age);       // 가장 새 속보 기준으로 수명 갱신
+  });
+  const gs=Object.values(out);
+  gs.forEach(g=>{
+    g.k = g.age<RISE ? ease(g.age/RISE)
+        : g.age>BEAM_MS ? 1-ease((g.age-BEAM_MS)/FALL)
+        : 1;
+  });
+  gs.sort((a,b)=>a.y-b.y||a.x-b.x);
+  gs.forEach((g,i)=>{
+    for(let j=0;j<i;j++){
+      const o=gs[j];
+      if(Math.abs(g.x-o.x)<5.5 && Math.abs(g.y-o.y)<5.5 && (o.lift-g.lift)<26) g.lift=o.lift+34;
+    }
+  });
+  return gs;
+}
+
 function drawMap(){
-  const g=geo(); g.K=V.S; const gs=state.groups||[], dimOn=!!state.focus;
+  const g=geo(); g.K=V.S;
+  const gs=liveGroups(), dimOn=!!state.focus;
+  const hn=document.getElementById("hudN"); if(hn) hn.textContent=String(gs.length).padStart(2,"0");
   let s="", t="";
-  /* 조용한 시·도 기본 라벨 */
+
+  /* 조용한 시·도 기본 라벨(활성 발광점과 같은 이름은 생략) */
   const activeBase={};
   gs.forEach(x=>{ if(x.name===x.region) activeBase[x.region]=1; });
   Object.entries(REGIONS).forEach(([name,r])=>{
@@ -363,38 +404,34 @@ function drawMap(){
     s+=`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(2.4*g.K*p.f).toFixed(1)}" fill="rgba(237,241,248,${dim?.12:.4})"/>`;
     t+=`<div class="tag base${dim?" dim":""}" style="left:${p.x.toFixed(1)}px;top:${(p.y-6*p.f).toFixed(1)}px;font-size:${(12*p.f*Math.max(.9,g.K)).toFixed(1)}px"><button data-r="${name}" data-x="${r.p[0]}" data-y="${r.p[1]}">${name}</button></div>`;
   });
-  /* 발광점 */
+
+  /* 속보 발광점 — k(0~1)로 솟았다 내려간다 */
   gs.forEach(x=>{
     const dim=dimOn&&state.focus.region!==x.region;
     const sel=dimOn&&state.focus.region===x.region;
     const u=Math.max(...x.items.map(i=>i.urgency));
     const col=URG[u].c, gid=u;
-    const L=x.lift+44+Math.min(x.items.length*28,84);
-    const B=proj(g,x.x,x.y,0), T2=proj(g,x.x,x.y,L);
+    const L=(x.lift+44+Math.min(x.items.length*28,84))*x.k;
+    const B=proj(g,x.x,x.y,0), T2=proj(g,x.x,x.y,Math.max(L,.01));
     const wB=3.1*g.K*B.f, wT=1.1*g.K*T2.f;
-    const grp=`<g opacity="${dim?.22:1}">`;
-    s+=grp;
-    /* 바닥 광원(원근 눌림 타원) */
-    const pr=26*g.K*B.f;
+    s+=`<g opacity="${((dim?.22:1)*Math.min(1,.25+x.k)).toFixed(2)}">`;
+    const pr=26*g.K*B.f*Math.min(1,x.k*1.4);
     s+=`<ellipse cx="${B.x.toFixed(1)}" cy="${B.y.toFixed(1)}" rx="${pr.toFixed(1)}" ry="${(pr*g.c).toFixed(1)}" fill="url(#pl${gid})"/>`;
-    /* 파문 */
     s+=`<ellipse cx="${B.x.toFixed(1)}" cy="${B.y.toFixed(1)}" rx="8" ry="${(8*g.c).toFixed(1)}" fill="none" stroke="${col}" stroke-width="1">
       <animate attributeName="rx" values="6;${(46*g.K*B.f).toFixed(0)}" dur="3s" repeatCount="indefinite"/>
       <animate attributeName="ry" values="${(6*g.c).toFixed(1)};${(46*g.K*B.f*g.c).toFixed(1)}" dur="3s" repeatCount="indefinite"/>
       <animate attributeName="opacity" values=".9;0" dur="3s" repeatCount="indefinite"/></ellipse>`;
-    /* 기둥: 산광 + 본체 */
     const beam=(mul,op)=>`<path d="M${(B.x-wB*mul).toFixed(1)} ${B.y.toFixed(1)} L${(B.x+wB*mul).toFixed(1)} ${B.y.toFixed(1)} L${(T2.x+wT*mul).toFixed(1)} ${T2.y.toFixed(1)} L${(T2.x-wT*mul).toFixed(1)} ${T2.y.toFixed(1)} Z" fill="url(#bm${gid})" opacity="${op}"/>`;
     s+=beam(3.4, sel?.5:.28)+beam(1, sel?1:.92);
-    /* 정점 광점 */
-    s+=`<circle cx="${T2.x.toFixed(1)}" cy="${T2.y.toFixed(1)}" r="${(3.2*g.K*T2.f).toFixed(1)}" fill="#fff"/>`;
+    s+=`<circle cx="${T2.x.toFixed(1)}" cy="${T2.y.toFixed(1)}" r="${(3.2*g.K*T2.f*Math.max(.4,x.k)).toFixed(1)}" fill="#fff"/>`;
     s+="</g>";
-    t+=`<div class="tag${dim?" dim":""}" style="--c:${col};left:${T2.x.toFixed(1)}px;top:${(T2.y-5*T2.f).toFixed(1)}px;font-size:${(17*T2.f*Math.max(.9,g.K)).toFixed(1)}px"><button data-r="${x.region}" data-x="${x.x}" data-y="${x.y}">${x.name}<b>${x.items.length}</b></button></div>`;
+    t+=`<div class="tag${dim?" dim":""}" style="--c:${col};opacity:${x.k.toFixed(2)};left:${T2.x.toFixed(1)}px;top:${(T2.y-5*T2.f).toFixed(1)}px;font-size:${(17*T2.f*Math.max(.9,g.K)).toFixed(1)}px"><button data-r="${x.region}" data-x="${x.x}" data-y="${x.y}">${x.name}<b>${x.items.length}</b></button></div>`;
   });
+
   /* 조준경 */
   if(state.focus&&state.focus.x!=null){
     const p=proj(g,state.focus.x,state.focus.y,0);
     const r=30*g.K*p.f, m=r*.45;
-    const cnr=(dx,dy)=>`M${(p.x+dx*r).toFixed(1)} ${(p.y+dy*(r*g.c)+dy*0).toFixed(1)}`;
     s+=`<g stroke="#CFE4FF" stroke-width="1.5" fill="none" opacity=".95">
       <path d="M${(p.x-r).toFixed(1)} ${(p.y-r*g.c+m*g.c).toFixed(1)} V${(p.y-r*g.c).toFixed(1)} H${(p.x-r+m).toFixed(1)}"/>
       <path d="M${(p.x+r-m).toFixed(1)} ${(p.y-r*g.c).toFixed(1)} H${(p.x+r).toFixed(1)} V${(p.y-r*g.c+m*g.c).toFixed(1)}"/>
@@ -402,6 +439,7 @@ function drawMap(){
       <path d="M${(p.x+r-m).toFixed(1)} ${(p.y+r*g.c).toFixed(1)} H${(p.x+r).toFixed(1)} V${(p.y+r*g.c-m*g.c).toFixed(1)}"/></g>`;
     t+=`<div class="retlab" style="left:${p.x.toFixed(1)}px;top:${(p.y+r*g.c+8).toFixed(1)}px">TRACK · ${state.focus.region}</div>`;
   }
+
   fxg.innerHTML=s; tagsEl.innerHTML=t;
   tagsEl.querySelectorAll("button").forEach(btn=>btn.addEventListener("click",()=>{
     const r=btn.dataset.r, x=+btn.dataset.x, y=+btn.dataset.y;
@@ -409,30 +447,10 @@ function drawMap(){
   }));
 }
 
-const state={items:[],focus:null,mode:"loading",nextAt:0};
 
 function render(){
-  /* 기사들을 발광점(도시 우선, 없으면 도 중심)으로 묶는다 */
-  const groups={}, byR={};
-  state.items.forEach(it=>{
-    (byR[it.region]=byR[it.region]||[]).push(it);
-    if(it.region==="전국") return;
-    const city=cityOf(it);
-    const key=city?it.region+"·"+city:it.region;
-    if(!groups[key]){
-      const p=city?CITY[it.region][city]:REGIONS[it.region].p;
-      groups[key]={name:city||it.region,region:it.region,x:p[0],y:p[1],items:[],lift:city?0:REGIONS[it.region].lift};
-    }
-    groups[key].items.push(it);
-  });
-  const gs=Object.values(groups).sort((a,b)=>a.y-b.y||a.x-b.x);
-  gs.forEach((g,i)=>{
-    for(let j=0;j<i;j++){
-      const o=gs[j];
-      if(Math.abs(g.x-o.x)<5.5 && Math.abs(g.y-o.y)<5.5 && (o.lift-g.lift)<26) g.lift=o.lift+34;
-    }
-  });
-  state.groups=gs;
+  const byR={};
+  state.items.forEach(it=>{(byR[it.region]=byR[it.region]||[]).push(it)});
   drawMap();
 
   /* 피드: 속보 칸 / 지역 뉴스 칸 */
@@ -443,7 +461,6 @@ function render(){
   document.getElementById("genTitle").innerHTML=rn+`지역 뉴스 <b id="cntGen">${gen.length}</b>`;
   document.getElementById("sTotal").textContent=state.items.length;
   document.getElementById("sRegions").textContent=Object.keys(byR).length;
-  const hn=document.getElementById("hudN"); if(hn) hn.textContent=String(gs.length).padStart(2,"0");
   document.getElementById("reset").classList.toggle("on",!!state.focus);
 
   const card=it=>{
@@ -485,7 +502,7 @@ function render(){
     sel.addEventListener("change",e=>{
       const r=e.target.value;
       if(!r){focusOn(null);return;}
-      if(r==="전국"){state.focus={region:"전국"};plane.style.setProperty("--zoom","1");render();return;}
+      if(r==="전국"){state.focus={region:"전국"};render();return;}
       focusOn({region:r,x:REGIONS[r].p[0],y:REGIONS[r].p[1]});
     });
   }
@@ -574,7 +591,7 @@ async function fetchNews(){
   }catch(err){
     console.warn("수집 실패:",err);
     if(!state.items.length){
-      state.items=SAMPLE.map((o,i)=>({...o,id:"s"+i,ts:Date.now()-i*60000}));
+      state.items=SAMPLE.map((o,i)=>({...o,id:"s"+i,ts:Date.now()-i*60000,seen:Date.now()}));
       setMode("sample","샘플 데이터");
     }else{
       setMode("live","LIVE · 속보망");   // 이미 받은 것으로 유지
@@ -638,8 +655,8 @@ function mergeItems(arr,markFresh){
   state.items.forEach(i=>{i.fresh=0;map[keyOf(i.headline)]=i;});
   arr.forEach(i=>{
     const k=keyOf(i.headline); if(!k) return;
-    if(!map[k]){ i.fresh=markFresh?1:0; map[k]=i; }
-    else if(i.ts>map[k].ts){ i.fresh=0; map[k]=i; }
+    if(!map[k]){ i.fresh=markFresh?1:0; i.seen=Date.now(); map[k]=i; }
+    else if(i.ts>map[k].ts){ i.fresh=0; i.seen=map[k].seen; map[k]=i; }
   });
   state.items=Object.values(map)
     .sort((a,b)=>(b.ts-a.ts)||(b.breaking-a.breaking))
@@ -716,6 +733,20 @@ setInterval(()=>{
   const b=document.getElementById("hudB"), n=3+Math.floor(Math.random()*3);
   b.textContent="▮".repeat(n)+"▯".repeat(5-n);
 },1000);
+
+/* 기둥 상승·하강 구간에서만 다시 그린다 */
+let lastLive=-1;
+(function beamLoop(){
+  const now=Date.now();
+  let animating=false, live=0;
+  state.items.forEach(it=>{
+    if(!it.breaking||it.region==="전국") return;
+    const age=now-(it.seen||now);
+    if(age<=BEAM_MS+FALL){ live++; if(age<RISE||age>BEAM_MS) animating=true; }
+  });
+  if(animating || live!==lastLive){ lastLive=live; drawMap(); }
+  requestAnimationFrame(beamLoop);
+})();
 
 fit(); render(); fetchNews();
 </script>
