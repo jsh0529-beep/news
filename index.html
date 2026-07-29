@@ -155,7 +155,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 384px 384px;height:calc(10
   color:#050B1A;font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;font-weight:500;z-index:2}
 .tkr-label.alert{background:var(--amber)}
 .tkr-track span i{font-style:normal;font-family:var(--mono);font-size:11px;color:#93A6BC;margin-left:8px}
-.tkr-track{display:flex;gap:44px;white-space:nowrap;animation:roll 55s linear infinite;padding-left:24px}
+.tkr-track{display:flex;gap:44px;white-space:nowrap;animation:roll var(--roll,55s) linear infinite;padding-left:24px}
 .tkr-track span{font-size:12.5px;color:var(--print-dim)}
 .tkr-track span b{color:var(--print);font-family:var(--display);font-weight:700;margin-right:7px}
 @keyframes roll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
@@ -510,17 +510,23 @@ function render(){
     :`<div class="secempty">${loading?"지역 소식 수집 중…":"표시할 지역 기사 없음"}</div>`;
   wire(lb); wire(lg);
 
-  const lbl=document.getElementById("tkrLabel");
-  let t="";
-  if(state.alerts.length){
+  const lbl=document.getElementById("tkrLabel"), tk=document.getElementById("ticker");
+  let t="", chars=0, alertMode=state.alerts.length>0;
+  if(alertMode){
     lbl.textContent="재난문자"; lbl.classList.add("alert");
-    t=state.alerts.map(a=>`<span><b>${esc(a.region)}</b>${esc(a.msg)}<i>${esc(a.time)}</i></span>`).join("");
+    t=state.alerts.map(a=>{chars+=a.msg.length+a.region.length;
+      return `<span><b>${esc(a.region)}</b>${esc(a.msg)}<i>${esc(a.time)}</i></span>`;}).join("");
   }else{
     lbl.textContent="FLASH"; lbl.classList.remove("alert");
     const tick=state.items.filter(i=>i.breaking).concat(state.items.filter(i=>!i.breaking)).slice(0,14);
-    t=tick.map(i=>`<span><b>${esc(i.region)}</b>${esc(i.headline)}</span>`).join("");
+    t=tick.map(i=>{chars+=i.headline.length+i.region.length;
+      return `<span><b>${esc(i.region)}</b>${esc(i.headline)}</span>`;}).join("");
   }
-  document.getElementById("ticker").innerHTML=t?t+t:"";
+  /* 흐름 속도: 글자당 시간으로 잡아 내용이 많아도 읽는 속도가 같다.
+     재난문자는 끝까지 읽는 글이라 뉴스 제목보다 훨씬 느긋하게. */
+  const per = alertMode ? 0.62 : 0.28;               // 초/글자
+  tk.style.setProperty("--roll", Math.max(40, Math.round(chars*per)) + "s");
+  tk.innerHTML=t?t+t:"";
 
   const sel=document.getElementById("filter");
   if(!sel.options.length){
