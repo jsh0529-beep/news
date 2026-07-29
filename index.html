@@ -153,6 +153,8 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 384px 384px;height:calc(10
 .ticker{height:38px;border-top:1px solid var(--rule);background:var(--ink-2);display:flex;align-items:center;overflow:hidden}
 .tkr-label{flex:none;padding:0 14px;height:100%;display:flex;align-items:center;background:var(--hoeoe);
   color:#050B1A;font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;font-weight:500;z-index:2}
+.tkr-label.alert{background:var(--amber)}
+.tkr-track span i{font-style:normal;font-family:var(--mono);font-size:11px;color:#93A6BC;margin-left:8px}
 .tkr-track{display:flex;gap:44px;white-space:nowrap;animation:roll 55s linear infinite;padding-left:24px}
 .tkr-track span{font-size:12.5px;color:var(--print-dim)}
 .tkr-track span b{color:var(--print);font-family:var(--display);font-weight:700;margin-right:7px}
@@ -241,7 +243,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 384px 384px;height:calc(10
 </main>
 
 <div class="ticker">
-  <div class="tkr-label">FLASH</div>
+  <div class="tkr-label" id="tkrLabel">FLASH</div>
   <div class="tkr-track" id="ticker"></div>
 </div>
 
@@ -362,7 +364,7 @@ function unproj(g,sx,sy){
 function geo(){ return {K:V.S/baseS*1, c:TC}; }   // 드로잉 배율·눌림 계수
 
 /* ── 오버레이 드로잉 ── */
-const state={items:[],focus:null,groups:[],mode:"loading",nextAt:0};
+const state={items:[],focus:null,groups:[],alerts:[],mode:"loading",nextAt:0};
 
 const fxg=document.getElementById("fxg"), tagsEl=document.getElementById("tags");
 
@@ -508,8 +510,16 @@ function render(){
     :`<div class="secempty">${loading?"지역 소식 수집 중…":"표시할 지역 기사 없음"}</div>`;
   wire(lb); wire(lg);
 
-  const tick=state.items.filter(i=>i.breaking).concat(state.items.filter(i=>!i.breaking)).slice(0,14);
-  const t=tick.map(i=>`<span><b>${esc(i.region)}</b>${esc(i.headline)}</span>`).join("");
+  const lbl=document.getElementById("tkrLabel");
+  let t="";
+  if(state.alerts.length){
+    lbl.textContent="재난문자"; lbl.classList.add("alert");
+    t=state.alerts.map(a=>`<span><b>${esc(a.region)}</b>${esc(a.msg)}<i>${esc(a.time)}</i></span>`).join("");
+  }else{
+    lbl.textContent="FLASH"; lbl.classList.remove("alert");
+    const tick=state.items.filter(i=>i.breaking).concat(state.items.filter(i=>!i.breaking)).slice(0,14);
+    t=tick.map(i=>`<span><b>${esc(i.region)}</b>${esc(i.headline)}</span>`).join("");
+  }
   document.getElementById("ticker").innerHTML=t?t+t:"";
 
   const sel=document.getElementById("filter");
@@ -626,6 +636,7 @@ async function fromBackend(part){
   if(!res.ok) throw new Error("HTTP "+res.status);
   const data=await res.json();
   if(!data.ok) throw new Error(data.error||"백엔드 오류");
+  if(Array.isArray(data.alerts)) state.alerts=data.alerts;
   return normalize(data.items||[]);
 }
 
